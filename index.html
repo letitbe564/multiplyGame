@@ -52,7 +52,7 @@
 
     function updateLayout() {
       isMobile = ('ontouchstart' in window) && window.innerWidth < 768;
-      nodeRadius = isMobile ? 55 : 40;
+      nodeRadius = isMobile ? 37 : 40;
       flyMargin = isMobile ? 40 : 80;
       bonusRadius = isMobile ? 32 : 25;
       DIGIT_BTN_SIZE = isMobile ? 30 : 48;
@@ -533,26 +533,26 @@
         const s = Math.sin(w.wingAngle) * 0.3 + 0.5;
         // Upper wing
         ctx.beginPath();
-        ctx.moveTo(-3, -2);
-        ctx.quadraticCurveTo(10 * s, -12, 14 * s, -2);
-        ctx.quadraticCurveTo(10 * s, 2, -2, 1);
+        ctx.moveTo(-5, -3);
+        ctx.quadraticCurveTo(16 * s, -18, 22 * s, -3);
+        ctx.quadraticCurveTo(16 * s, 3, -3, 2);
         ctx.closePath();
         ctx.fillStyle = w.color + '70';
         ctx.fill();
         // Lower wing
         ctx.beginPath();
-        ctx.moveTo(-2, 1);
-        ctx.quadraticCurveTo(8 * s, 8, 5 * s, 10);
-        ctx.quadraticCurveTo(0, 9, -3, 2);
+        ctx.moveTo(-3, 2);
+        ctx.quadraticCurveTo(12 * s, 12, 8 * s, 16);
+        ctx.quadraticCurveTo(0, 14, -5, 3);
         ctx.closePath();
         ctx.fillStyle = w.color + '50';
         ctx.fill();
         // Wing vein
         ctx.strokeStyle = w.color + '90';
-        ctx.lineWidth = 0.5;
+        ctx.lineWidth = 0.8;
         ctx.beginPath();
-        ctx.moveTo(-2, 0);
-        ctx.quadraticCurveTo(8 * s, -6, 12 * s, -1);
+        ctx.moveTo(-3, 0);
+        ctx.quadraticCurveTo(12 * s, -9, 18 * s, -2);
         ctx.stroke();
         ctx.restore();
         ctx.globalAlpha = 1;
@@ -856,7 +856,7 @@
         for (let i = 0; i < exampleStr.length; i++) {
           ctx.fillStyle = colors[i % colors.length];
           const charW = ctx.measureText(exampleStr[i]).width;
-          ctx.fillText(exampleStr[i], w / 2 + xOffset + charW / 2, h * 0.12);
+          ctx.fillText(exampleStr[i], w / 2 + xOffset + charW / 2, isMobile ? h * 0.17 : h * 0.12);
           xOffset += charW;
         }
         ctx.shadowBlur = 0;
@@ -869,7 +869,7 @@
 
         // Render timer bar
         const barW = 300, barH = 8;
-        const barX = w / 2 - barW / 2, barY = h * 0.20;
+        const barX = w / 2 - barW / 2, barY = isMobile ? h * 0.24 : h * 0.20;
         ctx.fillStyle = 'rgba(255,255,255,0.15)';
         roundRect(ctx, barX, barY, barW, barH, 4);
         ctx.fill();
