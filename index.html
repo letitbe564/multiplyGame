@@ -1,0 +1,1299 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Космическая Математика</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="game"></canvas>
+  <script>
+    // == CONSTANTS ==
+    const MAX_DIGIT_MIN = 2;
+    const MAX_DIGIT_MAX = 9;
+    const MAX_LIVES = 5;
+    const ANSWERS_COUNT = 4;
+    const TIMER_START = 5.0;
+    const TIMER_MIN = 1.5;
+    const TIMER_DECREASE = 0.3;
+    const TIMER_DECREASE_INTERVAL = 3;
+    const BASE_SCORE = 10;
+    const MULTIPLIER_INTERVAL = 5;
+    const BONUS_INTERVAL_MIN = 10;
+    const BONUS_INTERVAL_MAX = 15;
+    let DIGIT_BTN_SIZE, DIGIT_BTN_GAP;
+    let isMobile, nodeRadius, flyMargin, bonusRadius;
+
+    function updateLayout() {
+      isMobile = ('ontouchstart' in window) && window.innerWidth < 768;
+      nodeRadius = isMobile ? 55 : 40;
+      flyMargin = isMobile ? 40 : 80;
+      bonusRadius = isMobile ? 32 : 25;
+      DIGIT_BTN_SIZE = isMobile ? 30 : 48;
+      DIGIT_BTN_GAP = isMobile ? 4 : 8;
+    }
+    function updateCursor() {
+      if (typeof canvas !== 'undefined') {
+        canvas.style.cursor = isMobile ? 'default' : 'none';
+      }
+    }
+    updateLayout();
+
+    // == AUDIO ==
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    let audioCtx = null;
+
+    function ensureAudio() {
+      if (!AudioCtx) return;
+      if (!audioCtx) audioCtx = new AudioCtx();
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => { });
+    }
+
+    function playShoot() {
+      ensureAudio();
+      if (!audioCtx) return;
+      const duration = 0.15;
+      const bufferSize = audioCtx.sampleRate * duration;
+      const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        const t = i / audioCtx.sampleRate;
+        data[i] = (Math.random() * 2 - 1) * Math.exp(-t * 40) * 0.4;
+      }
+      const source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      const gain = audioCtx.createGain();
+      gain.gain.setValueAtTime(0.6, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+      source.connect(gain).connect(audioCtx.destination);
+      source.start();
+    }
+
+    function playHit() {
+      ensureAudio();
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1600, audioCtx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.15);
+    }
+
+    function playWrong() {
+      ensureAudio();
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.2);
+      gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(); osc.stop(audioCtx.currentTime + 0.25);
+    }
+
+    function playTaDam() {
+      ensureAudio();
+      if (!audioCtx) return;
+      const notes = [523, 659, 784, 1047];
+      notes.forEach((freq, i) => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime + i * 0.12);
+        const t = audioCtx.currentTime + i * 0.12;
+        gain.gain.setValueAtTime(0.3, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+        osc.connect(gain).connect(audioCtx.destination);
+        osc.start(t); osc.stop(t + 0.4);
+      });
+    }
+
+    function playBonus() {
+      ensureAudio();
+      if (!audioCtx) return;
+      [523, 659, 784].forEach((freq, i) => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        const t = audioCtx.currentTime + i * 0.08;
+        osc.frequency.setValueAtTime(freq, t);
+        gain.gain.setValueAtTime(0.25, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+        osc.connect(gain).connect(audioCtx.destination);
+        osc.start(t); osc.stop(t + 0.15);
+      });
+    }
+
+    // == STARS ==
+    let stars = [];
+
+    function initStars() {
+      stars = [];
+      const count = Math.floor((canvas.width * canvas.height) / 4000);
+      for (let i = 0; i < count; i++) {
+        stars.push({
+          x: Math.random() * canvas.width,
+          y: Math.random() * canvas.height,
+          radius: Math.random() * 2 + 0.5,
+          alpha: Math.random(),
+          speed: Math.random() * 0.3 + 0.1,
+          twinkleSpeed: Math.random() * 2 + 1,
+          twinkleOffset: Math.random() * Math.PI * 2,
+        });
+      }
+    }
+
+    function updateStars(dt) {
+      for (const star of stars) {
+        star.y += star.speed * 60 * dt;
+        star.alpha = 0.5 + 0.5 * Math.sin(gameTime * 2 * star.twinkleSpeed + star.twinkleOffset);
+        if (star.y > canvas.height) { star.y = 0; star.x = Math.random() * canvas.width; }
+      }
+    }
+
+    function renderStars() {
+      for (const star of stars) {
+        ctx.beginPath();
+        ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255, 255, 255, ${star.alpha})`;
+        ctx.fill();
+      }
+    }
+
+    let comets = [];
+
+    function spawnComet() {
+      if (comets.length >= 5) return;
+      if (Math.random() < 0.005) {
+        comets.push({
+          x: Math.random() * canvas.width * 0.5,
+          y: 0,
+          vx: Math.random() * 4 + 2,
+          vy: Math.random() * 2 + 1,
+          life: 1.0,
+        });
+      }
+    }
+
+    function updateComets(dt) {
+      for (let i = comets.length - 1; i >= 0; i--) {
+        const c = comets[i];
+        c.x += c.vx; c.y += c.vy; c.life -= dt * 0.3;
+        if (c.life <= 0) { comets.splice(i, 1); }
+      }
+    }
+
+    function renderComets() {
+      for (const c of comets) {
+        ctx.beginPath();
+        ctx.moveTo(c.x, c.y);
+        ctx.lineTo(c.x - c.vx * 3, c.y - c.vy * 3);
+        ctx.strokeStyle = `rgba(255, 255, 255, ${c.life * 0.6})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+    }
+
+    function renderCrosshair() {
+      const x = mouseX, y = mouseY;
+      const r = 15;
+
+      // Outer circle
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Cross lines
+      ctx.beginPath();
+      ctx.moveTo(x - r - 6, y); ctx.lineTo(x + r + 6, y);
+      ctx.moveTo(x, y - r - 6); ctx.lineTo(x, y + r + 6);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Red center dot
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff4444';
+      ctx.fill();
+    }
+
+    function renderHUD() {
+      const w = canvas.width;
+
+      // Lives (top-left)
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.font = '28px Nunito';
+      let heartsStr = '';
+      for (let i = 0; i < lives; i++) heartsStr += '❤️';
+      for (let i = lives; i < MAX_LIVES; i++) heartsStr += '🖤';
+      ctx.fillText(heartsStr, 20, 20);
+
+      // Score (top-right)
+      ctx.textAlign = 'right';
+      ctx.font = 'bold 28px Nunito';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(`Счёт: ${score}`, w - 20, 22);
+
+      // Multiplier
+      ctx.font = 'bold 20px Nunito';
+      ctx.fillStyle = '#feca57';
+      ctx.fillText(`×${multiplier}`, w - 20, 55);
+
+      // Progress bar for next multiplier
+      const progressInInterval = solvedProblems % MULTIPLIER_INTERVAL;
+      const barW = 150, barH = 6;
+      const barX = w - 20 - barW, barY = 62;
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      roundRect(ctx, barX, barY, barW, barH, 3);
+      ctx.fill();
+      ctx.fillStyle = '#feca57';
+      roundRect(ctx, barX, barY, barW * (progressInInterval / MULTIPLIER_INTERVAL), barH, 3);
+      ctx.fill();
+    }
+
+    // == ANSWER NODES ==
+    let answerNodes = [];
+
+    function initAnswerNodes() {
+      answerNodes = [];
+      if (!currentProblem) return;
+      const w = canvas.width, h = canvas.height;
+      const flyZone = { x1: flyMargin, y1: h * 0.25, x2: w - flyMargin, y2: h - flyMargin };
+
+      currentProblem.answers.forEach((ans, i) => {
+        const node = {
+          value: ans.value,
+          correct: ans.correct,
+          x: flyZone.x1 + Math.random() * (flyZone.x2 - flyZone.x1),
+          y: flyZone.y1 + Math.random() * (flyZone.y2 - flyZone.y1),
+          vx: (Math.random() - 0.5) * 80,
+          vy: (Math.random() - 0.5) * 80,
+          radius: nodeRadius,
+          flyZone: flyZone,
+          color: ['#f5576c', '#4facfe', '#43e97b', '#fa709a', '#a18cd1', '#fccb90'][i % 6],
+          wingAngle: 0,
+          alive: true,
+          hit: false,
+          hitTimer: 0,
+        };
+        answerNodes.push(node);
+      });
+    }
+
+    function updateAnswerNodes(dt) {
+      for (const node of answerNodes) {
+        if (!node.alive) continue;
+        if (node.hit) {
+          node.hitTimer += dt;
+          continue;
+        }
+
+        // Random direction changes
+        if (Math.random() < dt * 0.5) {
+          node.vx += (Math.random() - 0.5) * 120;
+          node.vy += (Math.random() - 0.5) * 120;
+        }
+        // Speed limit
+        const speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
+        const maxSpeed = 120;
+        if (speed > maxSpeed) { node.vx = (node.vx / speed) * maxSpeed; node.vy = (node.vy / speed) * maxSpeed; }
+        if (speed < 30 && Math.random() < dt * 0.5) {
+          node.vx += (Math.random() - 0.5) * 60;
+          node.vy += (Math.random() - 0.5) * 60;
+        }
+
+        node.x += node.vx * dt;
+        node.y += node.vy * dt;
+
+        // Bounce off fly zone boundaries
+        if (node.x < node.flyZone.x1 + node.radius) { node.x = node.flyZone.x1 + node.radius; node.vx *= -0.8; }
+        if (node.x > node.flyZone.x2 - node.radius) { node.x = node.flyZone.x2 - node.radius; node.vx *= -0.8; }
+        if (node.y < node.flyZone.y1 + node.radius) { node.y = node.flyZone.y1 + node.radius; node.vy *= -0.8; }
+        if (node.y > node.flyZone.y2 - node.radius) { node.y = node.flyZone.y2 - node.radius; node.vy *= -0.8; }
+
+        // Wing flapping
+        node.wingAngle += dt * 12;
+      }
+    }
+
+    function renderAnswerNodes() {
+      for (const node of answerNodes) {
+        if (!node.alive) continue;
+
+        const x = node.x, y = node.y, r = node.radius;
+
+        // Wings — detailed butterfly/fairy style
+        const wingFlap = Math.sin(node.wingAngle) * 0.35 + 0.65;
+        const upperW = r * 0.9 * wingFlap;
+        const upperH = r * 0.55;
+        const lowerW = r * 0.6 * wingFlap;
+        const lowerH = r * 0.4;
+
+        ctx.save();
+        for (let side = -1; side <= 1; side += 2) {
+          const dir = side; // -1 = left, 1 = right
+          const wingX = x + dir * r * 0.9;
+
+          // Upper wing (pointed, angled up)
+          ctx.beginPath();
+          ctx.moveTo(wingX - dir * 5, y - 5);
+          ctx.quadraticCurveTo(wingX + dir * upperW * 0.5, y - upperH - 10, wingX + dir * upperW, y - 5);
+          ctx.quadraticCurveTo(wingX + dir * upperW * 0.6, y + 5, wingX - dir * 3, y + 3);
+          ctx.closePath();
+          ctx.fillStyle = node.color + '50';
+          ctx.fill();
+
+          // Lower wing (smaller, rounded down)
+          ctx.beginPath();
+          ctx.moveTo(wingX - dir * 3, y + 3);
+          ctx.quadraticCurveTo(wingX + dir * lowerW * 0.4, y + lowerH + 5, wingX + dir * lowerW * 0.3, y + 10);
+          ctx.quadraticCurveTo(wingX - dir * 5, y + lowerH + 8, wingX - dir * 5, y + 3);
+          ctx.closePath();
+          ctx.fillStyle = node.color + '40';
+          ctx.fill();
+
+          // Wing veins (thin glowing lines)
+          ctx.strokeStyle = node.color + '80';
+          ctx.lineWidth = 1;
+
+          // Upper vein
+          ctx.beginPath();
+          ctx.moveTo(wingX - dir * 5, y - 2);
+          ctx.quadraticCurveTo(wingX + dir * upperW * 0.3, y - upperH * 0.6, wingX + dir * upperW * 0.8, y - 3);
+          ctx.stroke();
+
+          // Lower vein
+          ctx.beginPath();
+          ctx.moveTo(wingX - dir * 3, y + 3);
+          ctx.quadraticCurveTo(wingX + dir * lowerW * 0.2, y + lowerH * 0.5, wingX + dir * lowerW * 0.2, y + 8);
+          ctx.stroke();
+
+          // Small sparkles on wings (space theme)
+          const sparkleAlpha = 0.3 + 0.3 * Math.sin(gameTime * 3 + node.wingAngle + dir);
+          ctx.fillStyle = `rgba(255, 255, 255, ${sparkleAlpha})`;
+          ctx.beginPath();
+          ctx.arc(wingX + dir * upperW * 0.4, y - upperH * 0.4, 2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(wingX + dir * upperW * 0.6, y - upperH * 0.2, 1.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+
+        // Glow
+        const gradient = ctx.createRadialGradient(x, y, 0, x, y, r * 1.5);
+        gradient.addColorStop(0, node.color + '40');
+        gradient.addColorStop(1, node.color + '00');
+        ctx.beginPath();
+        ctx.arc(x, y, r * 1.5, 0, Math.PI * 2);
+        ctx.fillStyle = gradient;
+        ctx.fill();
+
+        // Circle background
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = node.color + 'CC';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Value text
+        ctx.fillStyle = '#fff';
+        ctx.font = `bold ${r * 0.7}px Nunito`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        ctx.shadowBlur = 4;
+        ctx.fillText(node.value, x, y);
+        ctx.shadowBlur = 0;
+      }
+    }
+
+    // == PARTICLES ==
+    let particles = [];
+    let fallingWings = [];
+
+    function spawnExplosion(x, y, color) {
+      for (let i = 0; i < 20; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = Math.random() * 200 + 50;
+        particles.push({
+          x, y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          radius: Math.random() * 4 + 2,
+          color: color,
+          life: 1.0,
+          decay: Math.random() * 1.5 + 1.0,
+        });
+      }
+    }
+
+    function spawnFallingWings(x, y, color) {
+      for (let i = 0; i < 2; i++) {
+        fallingWings.push({
+          x: x + (Math.random() - 0.5) * 20,
+          y: y + (Math.random() - 0.5) * 20,
+          vx: (Math.random() - 0.5) * 20,
+          vy: Math.random() * 20 + 10,
+          wingAngle: Math.random() * Math.PI * 2,
+          color: color,
+          life: 3.0,
+          swayOffset: Math.random() * Math.PI * 2,
+        });
+      }
+    }
+
+    function updateParticles(dt) {
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += 200 * dt; // gravity
+        p.life -= p.decay * dt;
+        if (p.life <= 0) { particles.splice(i, 1); }
+      }
+
+      for (let i = fallingWings.length - 1; i >= 0; i--) {
+        const w = fallingWings[i];
+        w.x += w.vx * dt + Math.sin(w.life * 3 + w.swayOffset) * 40 * dt;
+        w.y += w.vy * dt;
+        w.vy += 40 * dt; // gravity (slow fall)
+        w.wingAngle += dt * 8;
+        w.life -= dt;
+        if (w.life <= 0) { fallingWings.splice(i, 1); }
+      }
+    }
+
+    function renderParticles() {
+      for (const p of particles) {
+        ctx.globalAlpha = p.life;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      for (const w of fallingWings) {
+        ctx.globalAlpha = Math.min(1, w.life);
+        ctx.save();
+        ctx.translate(w.x, w.y);
+        const s = Math.sin(w.wingAngle) * 0.3 + 0.5;
+        // Upper wing
+        ctx.beginPath();
+        ctx.moveTo(-3, -2);
+        ctx.quadraticCurveTo(10 * s, -12, 14 * s, -2);
+        ctx.quadraticCurveTo(10 * s, 2, -2, 1);
+        ctx.closePath();
+        ctx.fillStyle = w.color + '70';
+        ctx.fill();
+        // Lower wing
+        ctx.beginPath();
+        ctx.moveTo(-2, 1);
+        ctx.quadraticCurveTo(8 * s, 8, 5 * s, 10);
+        ctx.quadraticCurveTo(0, 9, -3, 2);
+        ctx.closePath();
+        ctx.fillStyle = w.color + '50';
+        ctx.fill();
+        // Wing vein
+        ctx.strokeStyle = w.color + '90';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(-2, 0);
+        ctx.quadraticCurveTo(8 * s, -6, 12 * s, -1);
+        ctx.stroke();
+        ctx.restore();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function updateGameTimer(dt) {
+      if (state !== State.PLAYING || !currentProblem) return;
+      timer -= dt;
+      if (timer <= 0) {
+        lives--;
+        playWrong();
+        if (lives <= 0) {
+          state = State.GAME_OVER;
+        } else {
+          nextProblem();
+          initAnswerNodes();
+        }
+      }
+    }
+
+    // == BONUSES ==
+    let bonuses = [];
+    let bonusTimer = 0;
+
+    function updateBonuses(dt) {
+      bonusTimer -= dt;
+      if (bonusTimer <= 0 && bonuses.length === 0 && state === State.PLAYING) {
+        // Spawn a bonus
+        bonusTimer = BONUS_INTERVAL_MIN + Math.random() * (BONUS_INTERVAL_MAX - BONUS_INTERVAL_MIN);
+        const margin = 100;
+        bonuses.push({
+          x: margin + Math.random() * (canvas.width - margin * 2),
+          y: margin + Math.random() * (canvas.height - margin * 2),
+          radius: bonusRadius,
+          life: 1.0,
+          timer: 4.0,
+          floatingAngle: 0,
+        });
+      }
+
+      for (let i = bonuses.length - 1; i >= 0; i--) {
+        const b = bonuses[i];
+        b.timer -= dt;
+        b.floatingAngle += dt * 3;
+        if (b.timer <= 0) {
+          bonuses.splice(i, 1);
+          continue;
+        }
+        // Flashing effect when about to disappear
+        b.life = b.timer < 1 ? (Math.sin(Date.now() / 100 * 10) * 0.5 + 0.5) : 1.0;
+      }
+    }
+
+    function renderBonuses() {
+      for (const b of bonuses) {
+        if (b.life <= 0) continue;
+        ctx.save();
+        ctx.globalAlpha = b.life;
+        const x = b.x + Math.sin(b.floatingAngle) * 10;
+        const y = b.y + Math.cos(b.floatingAngle * 0.7) * 5;
+
+        // Golden glow
+        const gradient = ctx.createRadialGradient(x, y, 0, x, y, b.radius * 2);
+        gradient.addColorStop(0, '#feca5740');
+        gradient.addColorStop(1, '#feca5700');
+        ctx.beginPath();
+        ctx.arc(x, y, b.radius * 2, 0, Math.PI * 2);
+        ctx.fillStyle = gradient;
+        ctx.fill();
+
+        // Star shape
+        ctx.fillStyle = '#feca57';
+        ctx.shadowColor = '#feca57';
+        ctx.shadowBlur = 20;
+        drawStar(ctx, x, y, 5, b.radius, b.radius * 0.5);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Label
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 14px Nunito';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('+1 ❤️', x, y);
+        ctx.restore();
+      }
+    }
+
+    function drawStar(ctx, cx, cy, points, outerR, innerR) {
+      ctx.beginPath();
+      for (let i = 0; i < points * 2; i++) {
+        const r = i % 2 === 0 ? outerR : innerR;
+        const angle = (i * Math.PI) / points - Math.PI / 2;
+        const x = cx + Math.cos(angle) * r;
+        const y = cy + Math.sin(angle) * r;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+    }
+
+    // == STATE ==
+    const State = { MENU: 0, PLAYING: 1, GAME_OVER: 2 };
+    let state = State.MENU;
+    let maxDigit = 5;
+    let score = 0;
+    let lives = MAX_LIVES;
+    let multiplier = 1;
+    let solvedProblems = 0;
+    let timer = TIMER_START;
+    let currentProblem = null;
+    let mouseX = 0, mouseY = 0;
+    let transitioning = false;
+    let screenShake = 0;
+    let waitingForClick = false;
+    let praiseText = null;
+    let errorText = null;
+
+    const PRAISES = [
+      'Молодец! 🎉', 'Правильно! ⭐', 'Так держать! 💪', 'Отлично! 🏆',
+      'Супер! 🚀', 'Класс! 🌟', 'Здорово! 🎯', 'Великолепно! 👏',
+      'Прекрасно! 🌈', 'Ты гений! 🧠', 'В яблочко! 🎯', 'Точное попадание! 💥',
+      'Блестяще! ✨', 'Умница! 🌟', 'Заряжай ещё! 🔫', 'Не останавливайся! 🔥',
+      'Вперёд! ⚡', 'Есть попадание! 🎖️', 'Точный выстрел! 🎯', 'Продолжай в том же духе! 👍'
+    ];
+
+    const canvas = document.getElementById('game');
+    if (!canvas) throw new Error('Canvas element #game not found');
+    const ctx = canvas.getContext('2d');
+    updateCursor();
+
+    function resize() {
+      updateLayout();
+      updateCursor();
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      initStars();
+      if (state === State.PLAYING) {
+        initAnswerNodes();
+      }
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let lastTime = 0;
+    let gameTime = 0;
+
+    function gameLoop(time) {
+      const dt = Math.min((time - lastTime) / 1000, 0.05);
+      lastTime = time;
+      gameTime += dt;
+      update(dt);
+      render();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function update(dt) {
+      if (screenShake > 0) screenShake -= dt;
+      switch (state) {
+        case State.MENU: updateMenu(dt); break;
+        case State.PLAYING: updatePlaying(dt); break;
+        case State.GAME_OVER: updateGameOver(dt); break;
+      }
+    }
+
+    function render() {
+      ctx.save();
+      if (screenShake > 0) {
+        const intensity = screenShake * 5;
+        ctx.translate(
+          (Math.random() - 0.5) * intensity,
+          (Math.random() - 0.5) * intensity
+        );
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      renderStars();
+      renderComets();
+      switch (state) {
+        case State.MENU: renderMenu(); break;
+        case State.PLAYING: renderPlaying(); break;
+        case State.GAME_OVER: renderGameOver(); break;
+      }
+      ctx.restore();
+    }
+
+    function updateMenu(dt) {
+      updateStars(dt);
+      updateComets(dt);
+      spawnComet();
+      updateParticles(dt);
+    }
+    function renderMenu() {
+      const w = canvas.width, h = canvas.height;
+      const cx = w / 2;
+
+      // Title
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.shadowColor = '#667eea';
+      ctx.shadowBlur = 30;
+      if (isMobile) {
+        ctx.font = 'bold 26px Nunito';
+        ctx.fillText('🚀 Космическая', cx, h * 0.16);
+        ctx.fillText('Математика', cx, h * 0.23);
+      } else {
+        ctx.font = 'bold 56px Nunito';
+        ctx.fillText('🚀 Космическая Математика', cx, h * 0.25);
+      }
+      ctx.shadowBlur = 0;
+
+      // Max digit selector
+      ctx.font = isMobile ? '16px Nunito' : '24px Nunito';
+      ctx.fillStyle = '#aaa';
+      if (isMobile) {
+        ctx.fillText('Максимальная', cx, h * 0.36);
+        ctx.fillText('цифра:', cx, h * 0.40);
+      } else {
+        ctx.fillText('Максимальная цифра:', cx, h * 0.45);
+      }
+
+      const startX = cx - ((MAX_DIGIT_MAX - MAX_DIGIT_MIN + 1) * (DIGIT_BTN_SIZE + DIGIT_BTN_GAP)) / 2;
+      for (let i = MAX_DIGIT_MIN; i <= MAX_DIGIT_MAX; i++) {
+        const x = startX + (i - MAX_DIGIT_MIN) * (DIGIT_BTN_SIZE + DIGIT_BTN_GAP);
+        const y = isMobile ? h * 0.47 : h * 0.52;
+        const selected = i === maxDigit;
+        ctx.fillStyle = selected ? '#667eea' : 'rgba(255,255,255,0.15)';
+        ctx.shadowBlur = selected ? 15 : 0;
+        ctx.shadowColor = '#667eea';
+        roundRect(ctx, x - DIGIT_BTN_SIZE / 2, y - DIGIT_BTN_SIZE / 2, DIGIT_BTN_SIZE, DIGIT_BTN_SIZE, isMobile ? 6 : 10);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = selected ? '#fff' : '#888';
+        ctx.font = isMobile ? 'bold 14px Nunito' : 'bold 20px Nunito';
+        ctx.fillText(String(i), x, y);
+      }
+
+      // Start button
+      const btnW = isMobile ? 180 : 220, btnH = isMobile ? 50 : 60;
+      const btnX = cx - btnW / 2, btnY = h * (isMobile ? 0.62 : 0.68) - btnH / 2;
+      ctx.fillStyle = '#43e97b';
+      ctx.shadowColor = '#43e97b';
+      ctx.shadowBlur = 20;
+      roundRect(ctx, btnX, btnY, btnW, btnH, 15);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#fff';
+      ctx.font = isMobile ? 'bold 22px Nunito' : 'bold 28px Nunito';
+      ctx.fillText('СТАРТ', cx, isMobile ? h * 0.62 : h * 0.68);
+
+      // Footer
+      ctx.font = '16px Nunito';
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.fillText('Целься в правильный ответ и стреляй!', cx, h * 0.90);
+      renderParticles();
+      if (!isMobile) renderCrosshair();
+    }
+    function updatePlaying(dt) {
+      updateStars(dt);
+      updateComets(dt);
+      spawnComet();
+      updateAnswerNodes(dt);
+      updateGameTimer(dt);
+      updateParticles(dt);
+      updateBonuses(dt);
+
+      // Update praise / error text
+      if (praiseText) {
+        praiseText.y += praiseText.vy * dt;
+        praiseText.alpha -= dt * 0.3;
+        if (praiseText.alpha <= 0) praiseText.alpha = 0;
+      }
+      if (errorText) {
+        errorText.y += errorText.vy * dt;
+        errorText.alpha -= dt * 0.4;
+        if (errorText.alpha <= 0) errorText.alpha = 0;
+      }
+
+      // Auto-advance when waiting and all wings have fallen
+      if (waitingForClick && fallingWings.length === 0) {
+        waitingForClick = false;
+        transitioning = false;
+        praiseText = null;
+        nextProblem();
+        initAnswerNodes();
+      }
+    }
+    function renderPlaying() {
+      const w = canvas.width, h = canvas.height;
+
+      if (currentProblem) {
+        // Render example with rainbow-colored digits
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const exampleStr = `${currentProblem.a} ${currentProblem.op} ${currentProblem.b} = ?`;
+        ctx.font = 'bold 52px Nunito';
+        ctx.shadowColor = '#667eea';
+        ctx.shadowBlur = 30;
+        const colors = ['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#5f27cd'];
+        let xOffset = -ctx.measureText(exampleStr).width / 2;
+        for (let i = 0; i < exampleStr.length; i++) {
+          ctx.fillStyle = colors[i % colors.length];
+          const charW = ctx.measureText(exampleStr[i]).width;
+          ctx.fillText(exampleStr[i], w / 2 + xOffset + charW / 2, h * 0.12);
+          xOffset += charW;
+        }
+        ctx.shadowBlur = 0;
+
+        // Render answer nodes
+        renderAnswerNodes();
+
+        // Render bonuses
+        renderBonuses();
+
+        // Render timer bar
+        const barW = 300, barH = 8;
+        const barX = w / 2 - barW / 2, barY = h * 0.20;
+        ctx.fillStyle = 'rgba(255,255,255,0.15)';
+        roundRect(ctx, barX, barY, barW, barH, 4);
+        ctx.fill();
+        const timerRatio = Math.max(0, timer / TIMER_START);
+        ctx.fillStyle = timerRatio > 0.3 ? '#43e97b' : '#f5576c';
+        roundRect(ctx, barX, barY, barW * timerRatio, barH, 4);
+        ctx.fill();
+
+        renderHUD();
+      }
+
+      // Particles always render (falling wings from previous hits)
+      renderParticles();
+
+      // Praise text (renders even when currentProblem is null)
+      if (praiseText && praiseText.alpha > 0) {
+        ctx.save();
+        ctx.globalAlpha = praiseText.alpha;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = isMobile ? 'bold 22px Nunito' : 'bold 36px Nunito';
+        ctx.shadowColor = praiseText.color;
+        ctx.shadowBlur = 20;
+        ctx.fillStyle = praiseText.color;
+        ctx.fillText(praiseText.text, praiseText.x, praiseText.y);
+        ctx.shadowBlur = 0;
+        ctx.restore();
+      }
+
+      // Error text
+      if (errorText && errorText.alpha > 0) {
+        ctx.save();
+        ctx.globalAlpha = errorText.alpha;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = isMobile ? 'bold 18px Nunito' : 'bold 30px Nunito';
+        ctx.shadowColor = '#ff4444';
+        ctx.shadowBlur = 15;
+        ctx.fillStyle = '#ff4444';
+        ctx.fillText(errorText.text, errorText.x, errorText.y);
+        ctx.shadowBlur = 0;
+        ctx.restore();
+      }
+
+      if (!isMobile) renderCrosshair();
+    }
+    function updateGameOver(dt) {
+      updateStars(dt);
+      updateComets(dt);
+      spawnComet();
+      updateParticles(dt);
+    }
+    function renderGameOver() {
+      const w = canvas.width, h = canvas.height;
+      const cx = w / 2;
+
+      // Particles behind the overlay
+      renderParticles();
+
+      // Dim overlay
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.fillRect(0, 0, w, h);
+
+      // Title
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = 'bold 48px Nunito';
+      ctx.fillStyle = '#f5576c';
+      ctx.shadowColor = '#f5576c';
+      ctx.shadowBlur = 20;
+      ctx.fillText('Игра окончена!', cx, h * 0.22);
+      ctx.shadowBlur = 0;
+
+      // Final score
+      ctx.font = 'bold 36px Nunito';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(`Счёт: ${score}`, cx, h * 0.33);
+
+      // Stats
+      ctx.font = '22px Nunito';
+      ctx.fillStyle = '#aaa';
+      ctx.fillText(`Решено примеров: ${solvedProblems}`, cx, h * 0.40);
+      ctx.fillText(`Максимальный множитель: ×${multiplier}`, cx, h * 0.45);
+
+      // Play Again button
+      const btnW = 260, btnH = 60;
+      const btnX = cx - btnW / 2;
+      ctx.fillStyle = '#43e97b';
+      ctx.shadowColor = '#43e97b';
+      ctx.shadowBlur = 15;
+      roundRect(ctx, btnX, h * 0.57 - btnH / 2, btnW, btnH, 15);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 24px Nunito';
+      ctx.fillText('Играть снова', cx, h * 0.57);
+
+      // Main Menu button
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.shadowBlur = 0;
+      roundRect(ctx, btnX, h * 0.67 - btnH / 2, btnW, btnH, 15);
+      ctx.fill();
+      ctx.fillStyle = '#aaa';
+      ctx.fillText('В главное меню', cx, h * 0.67);
+
+      if (!isMobile) renderCrosshair();
+    }
+
+    canvas.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
+    canvas.addEventListener('click', (e) => { handleClick(e.clientX, e.clientY); });
+
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      const touch = e.touches[0];
+      handleClick(touch.clientX, touch.clientY);
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      const touch = e.touches[0];
+      mouseX = touch.clientX;
+      mouseY = touch.clientY;
+    }, { passive: false });
+
+    function handleClick(x, y) {
+      ensureAudio();
+      switch (state) {
+        case State.MENU: handleMenuClick(x, y); break;
+        case State.PLAYING: handlePlayingClick(x, y); break;
+        case State.GAME_OVER: handleGameOverClick(x, y); break;
+      }
+    }
+
+    function handleMenuClick(x, y) {
+      const w = canvas.width, h = canvas.height;
+      const cx = w / 2;
+
+      // Digit buttons
+      const startX = cx - ((MAX_DIGIT_MAX - MAX_DIGIT_MIN + 1) * (DIGIT_BTN_SIZE + DIGIT_BTN_GAP)) / 2;
+      for (let i = MAX_DIGIT_MIN; i <= MAX_DIGIT_MAX; i++) {
+        const bx = startX + (i - MAX_DIGIT_MIN) * (DIGIT_BTN_SIZE + DIGIT_BTN_GAP);
+        const by = isMobile ? h * 0.47 : h * 0.52;
+        if (x > bx - DIGIT_BTN_SIZE / 2 && x < bx + DIGIT_BTN_SIZE / 2 &&
+          y > by - DIGIT_BTN_SIZE / 2 && y < by + DIGIT_BTN_SIZE / 2) {
+          maxDigit = i;
+          return;
+        }
+      }
+
+      // Start button
+      const btnW = isMobile ? 180 : 220, btnH = isMobile ? 50 : 60;
+      const btnX = cx - btnW / 2, btnY = h * (isMobile ? 0.62 : 0.68) - btnH / 2;
+      if (x > btnX && x < btnX + btnW && y > btnY && y < btnY + btnH) {
+        startGame();
+      }
+    }
+
+    function handlePlayingClick(x, y) {
+      if (transitioning && !waitingForClick) return;
+      if (waitingForClick) {
+        waitingForClick = false;
+        transitioning = false;
+        praiseText = null;
+        nextProblem();
+        initAnswerNodes();
+        return;
+      }
+      if (!currentProblem) return;
+      playShoot();
+
+      // Check each answer node
+      for (const node of answerNodes) {
+        if (!node.alive) continue;
+        const dx = x - node.x;
+        const dy = y - node.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < node.radius) {
+          screenShake = 0.15;
+          // Hit this node
+          node.hit = true;
+          node.hitTimer = 0;
+
+          if (node.correct) {
+            // Correct!
+            score += BASE_SCORE * multiplier;
+            solvedProblems++;
+            playTaDam();
+            spawnExplosion(node.x, node.y, node.color);
+            spawnFallingWings(node.x, node.y, node.color);
+            node.alive = false;
+
+            // Update multiplier
+            multiplier = 1 + Math.floor(solvedProblems / MULTIPLIER_INTERVAL);
+
+            // Show praise text
+            const praiseColors = ['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#43e97b', '#fa709a', '#a29bfe'];
+            praiseText = {
+              text: PRAISES[Math.floor(Math.random() * PRAISES.length)],
+              color: praiseColors[Math.floor(Math.random() * praiseColors.length)],
+              x: node.x,
+              y: node.y - 20,
+              alpha: 1.0,
+              vy: -60,
+            };
+
+            // Clear current problem so timer doesn't double-penalize during delay
+            currentProblem = null;
+
+            // Wait for click or wings to fall before continuing
+            waitingForClick = true;
+            transitioning = true;
+          } else {
+            // Wrong!
+            lives--;
+            playWrong();
+            errorText = {
+              text: 'Ошибка, жизнь потеряна!',
+              x: node.x,
+              y: node.y,
+              alpha: 1.0,
+              vy: -50,
+            };
+            spawnExplosion(node.x, node.y, '#ff4444');
+            spawnFallingWings(node.x, node.y, node.color);
+            node.alive = false;
+
+            if (lives <= 0) {
+              state = State.GAME_OVER;
+            } else {
+              // Add one new wrong answer to replace the dead one
+              transitioning = true;
+              setTimeout(() => {
+                // Generate a new wrong answer
+                const correct = currentProblem.correctAnswer;
+                let newValue;
+                let pool;
+
+                if (currentProblem.op === '÷') {
+                  // For division: pick from 1..9
+                  const existingValues = new Set(answerNodes.filter(n => n.alive).map(n => n.value));
+                  existingValues.add(correct);
+                  pool = [];
+                  for (let r = 1; r <= 9; r++) {
+                    if (!existingValues.has(r)) pool.push(r);
+                  }
+                } else {
+                  // For multiplication: pick from possible products
+                  const allPossible = new Set();
+                  for (let i = 1; i <= maxDigit; i++) {
+                    for (let j = 1; j <= 9; j++) {
+                      allPossible.add(i * j);
+                    }
+                  }
+                  const existingValues = new Set(answerNodes.filter(n => n.alive).map(n => n.value));
+                  existingValues.add(correct);
+                  pool = [...allPossible].filter(v => !existingValues.has(v));
+                }
+
+                if (pool.length > 0) {
+                  newValue = pool[Math.floor(Math.random() * pool.length)];
+                } else {
+                  newValue = correct + 1;
+                  while (answerNodes.filter(n => n.alive).some(n => n.value === newValue)) newValue++;
+                }
+
+                // Position near the edges, away from existing nodes
+                const flyZone = { x1: flyMargin, y1: 0, x2: canvas.width - flyMargin, y2: canvas.height - flyMargin * 0.5 };
+
+                const w = canvas.width, h = canvas.height;
+                const newNode = {
+                  value: newValue,
+                  correct: false,
+                  x: Math.random() < 0.5 ? flyZone.x1 + 20 : flyZone.x2 - 20,
+                  y: flyZone.y1 + Math.random() * (flyZone.y2 * 0.6),
+                  vx: (Math.random() - 0.5) * 100,
+                  vy: (Math.random() - 0.5) * 100,
+                  radius: nodeRadius,
+                  flyZone: flyZone,
+                  color: ['#f5576c', '#4facfe', '#43e97b', '#fa709a', '#a18cd1', '#fccb90'][answerNodes.length % 6],
+                  wingAngle: Math.random() * Math.PI * 2,
+                  alive: true,
+                  hit: false,
+                  hitTimer: 0,
+                };
+                answerNodes.push(newNode);
+                transitioning = false;
+              }, 400);
+            }
+          }
+          return; // Only one hit per click
+        }
+      }
+
+      // Check bonuses
+      for (let i = bonuses.length - 1; i >= 0; i--) {
+        const b = bonuses[i];
+        const dx = x - (b.x + Math.sin(b.floatingAngle) * 10);
+        const dy = y - (b.y + Math.cos(b.floatingAngle * 0.7) * 5);
+        if (Math.sqrt(dx * dx + dy * dy) < b.radius) {
+          bonuses.splice(i, 1);
+          lives = Math.min(MAX_LIVES, lives + 1);
+          playBonus();
+          spawnExplosion(b.x, b.y, '#feca57');
+          return;
+        }
+      }
+    }
+
+    function handleGameOverClick(x, y) {
+      const w = canvas.width, h = canvas.height;
+      const cx = w / 2;
+
+      // Play Again button
+      const btnW = 260, btnH = 60;
+      const playBtnX = cx - btnW / 2, playBtnY = h * 0.57 - btnH / 2;
+      if (x > playBtnX && x < playBtnX + btnW && y > playBtnY && y < playBtnY + btnH) {
+        startGame();
+        return;
+      }
+
+      // Main Menu button
+      const menuBtnY = h * 0.67 - btnH / 2;
+      if (x > playBtnX && x < playBtnX + btnW && y > menuBtnY && y < menuBtnY + btnH) {
+        state = State.MENU;
+      }
+    }
+
+    function startGame() {
+      score = 0;
+      lives = MAX_LIVES;
+      multiplier = 1;
+      solvedProblems = 0;
+      timer = TIMER_START;
+      bonuses = [];
+      bonusTimer = BONUS_INTERVAL_MIN + Math.random() * (BONUS_INTERVAL_MAX - BONUS_INTERVAL_MIN);
+      state = State.PLAYING;
+      nextProblem();
+      initAnswerNodes();
+    }
+
+    function shuffleArray(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+    }
+
+    function nextProblem() {
+      const isDiv = Math.random() < 0.4;
+      let a, b, correct, op;
+
+      if (isDiv) {
+        // Division: a ÷ b = result, where a = b × result
+        b = Math.floor(Math.random() * maxDigit) + 1;
+        correct = Math.floor(Math.random() * 9) + 1;
+        a = b * correct;
+        op = '÷';
+
+        // Generate wrong answers from possible division results (1..9)
+        const pool = [];
+        for (let r = 1; r <= 9; r++) {
+          if (r !== correct) pool.push(r);
+        }
+        shuffleArray(pool);
+        const wrongAnswers = [];
+        for (let i = 0; i < ANSWERS_COUNT - 1 && i < pool.length; i++) {
+          wrongAnswers.push(pool[i]);
+        }
+        // Fallback if not enough
+        const used = new Set([correct, ...wrongAnswers]);
+        for (let i = wrongAnswers.length; i < ANSWERS_COUNT - 1; i++) {
+          let fb = correct + (i + 1);
+          while (used.has(fb)) fb++;
+          wrongAnswers.push(fb);
+          used.add(fb);
+        }
+        shuffleArray(wrongAnswers);
+        const answers = [{ value: correct, correct: true }, ...wrongAnswers.map(v => ({ value: v, correct: false }))];
+        shuffleArray(answers);
+        currentProblem = { a, b, correctAnswer: correct, answers, op };
+      } else {
+        // Multiplication
+        a = Math.floor(Math.random() * maxDigit) + 1;
+        b = Math.floor(Math.random() * 9) + 1;
+        correct = a * b;
+        op = '×';
+
+        // Randomly swap display order (multipliers swap places)
+        if (Math.random() < 0.5) [a, b] = [b, a];
+
+        // Generate wrong answers from possible products within range
+        const allPossible = new Set();
+        for (let i = 1; i <= maxDigit; i++) {
+          for (let j = 1; j <= 9; j++) {
+            allPossible.add(i * j);
+          }
+        }
+        const pool = [...allPossible].filter(v => v !== correct);
+        const wrongAnswers = [];
+        const used = new Set([correct]);
+        for (let i = 0; i < ANSWERS_COUNT - 1; i++) {
+          if (pool.length === 0) {
+            let fallback = correct + (i + 1);
+            while (used.has(fallback)) fallback += 1;
+            wrongAnswers.push(fallback);
+            used.add(fallback);
+          } else {
+            const idx = Math.floor(Math.random() * pool.length);
+            wrongAnswers.push(pool[idx]);
+            used.add(pool[idx]);
+            pool.splice(idx, 1);
+          }
+        }
+        shuffleArray(wrongAnswers);
+        const answers = [{ value: correct, correct: true }, ...wrongAnswers.map(v => ({ value: v, correct: false }))];
+        shuffleArray(answers);
+        currentProblem = { a, b, correctAnswer: correct, answers, op };
+      }
+
+      timer = Math.max(TIMER_MIN, TIMER_START - Math.floor(solvedProblems / TIMER_DECREASE_INTERVAL) * TIMER_DECREASE);
+    }
+
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+
+</html>
